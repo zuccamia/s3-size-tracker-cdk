@@ -46,6 +46,9 @@ Lambdas as environment variables. IAM access is granted least-privilege in code.
 npm install                       # installs aws-cdk locally
 npx cdk --version
 
+# If node still defaults to the homebrew-installed 26.0.0 version
+export PATH="$(asdf where nodejs 24.0.0)/bin:$PATH"
+
 # Python deps
 python3 -m venv .venv
 source .venv/bin/activate
