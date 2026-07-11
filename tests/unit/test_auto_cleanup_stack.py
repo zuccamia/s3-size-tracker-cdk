@@ -60,12 +60,16 @@ def test_auto_cleanup_metric_filter_alarm_and_cleaner(stacks):
     template = Template.from_stack(stacks["AutoCleanupStack"])
 
     # Metric filter emits TotalObjectSize under Assignment4App with BucketName
-    # pulled from the logged JSON so we get one time series per bucket.
+    # pulled from the logged JSON so we get one time series per bucket. The
+    # pattern also excludes plot.png so the plot lambda's output doesn't
+    # contribute to the alarm's SUM.
     template.has_resource_properties(
         "AWS::Logs::MetricFilter",
         Match.object_like(
             {
-                "FilterPattern": Match.string_like_regexp(r"\$\.size_delta"),
+                "FilterPattern": Match.string_like_regexp(
+                    r'\$\.size_delta.*\$\.object_name != "plot\.png"'
+                ),
                 "MetricTransformations": [
                     Match.object_like(
                         {

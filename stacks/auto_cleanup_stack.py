@@ -127,13 +127,25 @@ class AutoCleanupStack(Stack):
         # get one time series per bucket automatically; missing/null size_delta
         # entries (the miss-warning path) don't publish because the JSON
         # pattern requires size_delta to exist AND be numeric.
+        #
+        # object_name != "plot.png" excludes the plot lambda's output object
+        # from the alarm's SUM -- that's app-produced output written to the
+        # same bucket, and it can easily exceed the 20 KB threshold on its
+        # own. Excluding it lets the plot survive long enough to be downloaded
+        # instead of getting cleaned as soon as the plot lambda finishes.
+        # (The key "plot.png" comes from the plotter lambda code.)
         logs.MetricFilter(
             self,
             "TotalObjectSizeFilter",
             log_group=logging_log_group,
             metric_namespace=self.METRIC_NAMESPACE,
             metric_name=self.METRIC_NAME,
-            filter_pattern=logs.FilterPattern.exists("$.size_delta"),
+            filter_pattern=logs.FilterPattern.all(
+                logs.FilterPattern.exists("$.size_delta"),
+                logs.FilterPattern.string_value(
+                    "$.object_name", "!=", "plot.png"
+                ),
+            ),
             metric_value="$.size_delta",
             dimensions={"BucketName": "$.bucket_name"},
         )
