@@ -8,7 +8,7 @@ def test_driver_stack_injects_api_url(stacks):
         Match.object_like(
             {
                 "Handler": "lambda_function.lambda_handler",
-                "Timeout": 60,
+                "Timeout": 360,
                 "Environment": {
                     "Variables": Match.object_like(
                         {

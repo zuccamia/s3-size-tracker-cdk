@@ -119,9 +119,9 @@ def test_auto_cleanup_metric_filter_alarm_and_cleaner(stacks):
         ),
     )
 
-    # Single alarm: threshold=20, fires on OK -> ALARM at > threshold, and the
-    # metric it watches is a math expression (bytes -> KB) referencing our
-    # metric with the BucketName dimension.
+    # Single alarm: threshold=20 (bytes), fires on OK -> ALARM at > threshold,
+    # SUM statistic on the TotalObjectSize metric with the BucketName
+    # dimension. Metric is emitted in bytes so no math expression is needed.
     template.resource_count_is("AWS::CloudWatch::Alarm", 1)
     template.has_resource_properties(
         "AWS::CloudWatch::Alarm",
@@ -131,31 +131,10 @@ def test_auto_cleanup_metric_filter_alarm_and_cleaner(stacks):
                 "ComparisonOperator": "GreaterThanThreshold",
                 "EvaluationPeriods": 1,
                 "TreatMissingData": "notBreaching",
-                "Metrics": Match.array_with(
-                    [
-                        Match.object_like({"Expression": "m1 / 1024"}),
-                        Match.object_like(
-                            {
-                                "MetricStat": Match.object_like(
-                                    {
-                                        "Metric": Match.object_like(
-                                            {
-                                                "Namespace": "Assignment4App",
-                                                "MetricName": "TotalObjectSize",
-                                                "Dimensions": [
-                                                    Match.object_like(
-                                                        {"Name": "BucketName"}
-                                                    )
-                                                ],
-                                            }
-                                        ),
-                                        "Stat": "Sum",
-                                    }
-                                )
-                            }
-                        ),
-                    ]
-                ),
+                "Namespace": "Assignment4App",
+                "MetricName": "TotalObjectSize",
+                "Statistic": "Sum",
+                "Dimensions": [Match.object_like({"Name": "BucketName"})],
                 # CDK only emits AlarmActions into the template when at least
                 # one action has been added, so asserting the key is present
                 # transitively proves an action is wired. The concrete wiring

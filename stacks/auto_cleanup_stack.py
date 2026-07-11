@@ -45,10 +45,10 @@ class AutoCleanupStack(Stack):
     METRIC_NAMESPACE = "Assignment4App"
     METRIC_NAME = "TotalObjectSize"
     ALARM_ID = "CleanerAlarm"
-    # Threshold value the assignment fixes: SUM of size_delta above 20 KB fires
-    # the alarm. Metric is emitted in bytes (the raw log field), so the alarm
-    # uses a math expression to divide by 1024 -- see below.
-    ALARM_THRESHOLD_KB = 20
+    # Threshold value the assignment fixes: SUM of size_delta above 20 bytes
+    # fires the alarm. The metric is already in bytes (size_delta comes from
+    # the S3 event as bytes), so no unit conversion is needed.
+    ALARM_THRESHOLD_BYTES = 20
 
     def __init__(
         self,
@@ -179,23 +179,9 @@ class AutoCleanupStack(Stack):
         bucket.grant_read(cleaner_fn)
         bucket.grant_delete(cleaner_fn)
 
-        # Raw metric is in bytes (matches the assignment's log format:
-        # `{"size_delta": 98}` for 98 bytes). The alarm's threshold is given
-        # in KB, so wrap the metric in a math expression that divides by 1024.
-        # That keeps `ALARM_THRESHOLD_KB = 20` readable at the call site.
-        size_bytes_metric = cloudwatch.Metric(
-            namespace=self.METRIC_NAMESPACE,
-            metric_name=self.METRIC_NAME,
-            dimensions_map={"BucketName": bucket.bucket_name},
-            statistic="Sum",
-            period=Duration.minutes(1),
-        )
-        size_kb_metric = cloudwatch.MathExpression(
-            expression="m1 / 1024",
-            using_metrics={"m1": size_bytes_metric},
-            label="TotalObjectSize (KB)",
-            period=Duration.minutes(1),
-        )
+        # Metric matches the assignment's log format: `{"size_delta": 98}` for
+        # 98 bytes. Alarm compares SUM directly against the byte threshold.
+        #
         # SUM-period caveat (documented in the assignment): a 1-minute SUM
         # aggregates whatever datapoints happen to land in the same wall-clock
         # minute, so two rapid PUTs straddling a minute boundary won't add up
@@ -204,11 +190,18 @@ class AutoCleanupStack(Stack):
         # explicitly says spurious/missed firings are OK to reason about.
         # treat_missing_data=NOT_BREACHING so quiet stretches don't flip the
         # alarm into INSUFFICIENT_DATA and then back to OK.
+        size_metric = cloudwatch.Metric(
+            namespace=self.METRIC_NAMESPACE,
+            metric_name=self.METRIC_NAME,
+            dimensions_map={"BucketName": bucket.bucket_name},
+            statistic="Sum",
+            period=Duration.minutes(1),
+        )
         self.alarm = cloudwatch.Alarm(
             self,
             self.ALARM_ID,
-            metric=size_kb_metric,
-            threshold=self.ALARM_THRESHOLD_KB,
+            metric=size_metric,
+            threshold=self.ALARM_THRESHOLD_BYTES,
             evaluation_periods=1,
             datapoints_to_alarm=1,
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,

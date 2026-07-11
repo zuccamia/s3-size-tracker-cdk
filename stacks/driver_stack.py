@@ -32,7 +32,9 @@ class DriverStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda_function.lambda_handler",
             code=lambda_.Code.from_asset(self.DRIVER_CODE_DIR),
-            timeout=Duration.minutes(1),  # the manual "increase timeout to 1 min"
+            # 3 * 90s of sleeps + PUT/HTTP calls; needs to be well above the
+            # sum. Lambda hard-caps at 15 min, we're comfortably under.
+            timeout=Duration.minutes(6),
             log_group=logs.LogGroup(
                 self,
                 f"{self.DRIVER_FN_ID}Logs",
