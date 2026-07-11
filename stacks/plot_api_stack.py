@@ -19,6 +19,10 @@ class PlotApiStack(Stack):
     REST_API_PATH = "plot"
     REST_API_METHOD = "GET"
     REST_API_DEPLOY_STAGE = "dev"
+    # Object key the plotter uses when writing the generated PNG into the
+    # bucket. Exposed as a class attribute so AutoCleanupStack can exclude it
+    # from the size alarm's metric filter without duplicating the literal.
+    PLOT_OBJECT_KEY = "plot"
 
     def __init__(
         self,
@@ -60,7 +64,10 @@ class PlotApiStack(Stack):
                 "TABLE_NAME": table.table_name,
                 "GSI_NAME": gsi_name,
                 "GSI_PARTITION_VALUE": gsi_partition_value,
-                "BUCKET_NAME": bucket.bucket_name,  # where plot.png is written
+                "BUCKET_NAME": bucket.bucket_name,  # where the plot is written
+                # Pin the plotter's output key to the stack's constant so the
+                # AutoCleanupStack exclusion can't drift out of sync.
+                "PLOT_KEY": self.PLOT_OBJECT_KEY,
             },
         )
 

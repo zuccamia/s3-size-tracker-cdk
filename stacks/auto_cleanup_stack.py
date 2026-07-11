@@ -33,6 +33,7 @@ import aws_cdk.aws_sns_subscriptions as sns_subs
 import aws_cdk.aws_sqs as sqs
 from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
 from constructs import Construct
+from stacks.plot_api_stack import PlotApiStack
 
 
 class AutoCleanupStack(Stack):
@@ -128,12 +129,12 @@ class AutoCleanupStack(Stack):
         # entries (the miss-warning path) don't publish because the JSON
         # pattern requires size_delta to exist AND be numeric.
         #
-        # object_name != "plot.png" excludes the plot lambda's output object
-        # from the alarm's SUM -- that's app-produced output written to the
-        # same bucket, and it can easily exceed the 20 KB threshold on its
-        # own. Excluding it lets the plot survive long enough to be downloaded
-        # instead of getting cleaned as soon as the plot lambda finishes.
-        # (The key "plot.png" comes from the plotter lambda code.)
+        # Exclude the plot lambda's output object from the alarm's SUM --
+        # that's app-produced output written to the same bucket, and it can
+        # easily exceed the byte threshold on its own. Excluding it lets the
+        # plot survive long enough to be downloaded instead of getting cleaned
+        # as soon as the plot lambda finishes. The exact key is owned by
+        # PlotApiStack so both sides can't drift.
         logs.MetricFilter(
             self,
             "TotalObjectSizeFilter",
@@ -143,7 +144,7 @@ class AutoCleanupStack(Stack):
             filter_pattern=logs.FilterPattern.all(
                 logs.FilterPattern.exists("$.size_delta"),
                 logs.FilterPattern.string_value(
-                    "$.object_name", "!=", "plot.png"
+                    "$.object_name", "!=", PlotApiStack.PLOT_OBJECT_KEY
                 ),
             ),
             metric_value="$.size_delta",

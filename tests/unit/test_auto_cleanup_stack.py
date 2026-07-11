@@ -68,7 +68,7 @@ def test_auto_cleanup_metric_filter_alarm_and_cleaner(stacks):
         Match.object_like(
             {
                 "FilterPattern": Match.string_like_regexp(
-                    r'\$\.size_delta.*\$\.object_name != "plot\.png"'
+                    r'\$\.size_delta.*\$\.object_name != "plot"'
                 ),
                 "MetricTransformations": [
                     Match.object_like(
