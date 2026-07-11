@@ -2,6 +2,7 @@ import os
 import time
 
 import boto3
+from s3_events import s3_records_from_sqs_record
 
 # S3 and DynamoDB live in the same region as this lambda, so boto3 picks up the
 # region from the execution environment automatically -- no region_name needed.
@@ -17,14 +18,8 @@ TABLE_NAME = os.environ["TABLE_NAME"]
 GSI_PARTITION_VALUE = os.environ.get("GSI_PARTITION_VALUE", "ALL_BUCKETS")
 
 
-def extract_bucket_names(event):
-    # One S3 notification can batch several records (and in theory span buckets),
-    # so collect the distinct names. We recompute the whole bucket on each
-    # trigger, so the individual changed keys don't matter -- only the bucket.
-    names = set()
-    for record in event.get("Records", []):
-        names.add(record["s3"]["bucket"]["name"])
-    return names
+def buckets_from_sqs_record(sqs_record):
+    return {r["s3"]["bucket"]["name"] for r in s3_records_from_sqs_record(sqs_record)}
 
 
 def compute_bucket_size(bucket_name):
@@ -57,24 +52,35 @@ def record_size(bucket_name, total_size, object_count, timestamp):
 
 
 def lambda_handler(event, context):
-    recorded = []
-    for bucket_name in extract_bucket_names(event):
-        total_size, object_count = compute_bucket_size(bucket_name)
-        # Epoch milliseconds: numeric, so the Part 3 "last 10 seconds" BETWEEN
-        # query compares correctly, and fine-grained enough that two events
-        # rarely collide on the (BucketName, Timestamp) sort key.
-        timestamp = int(time.time() * 1000)
-        record_size(bucket_name, total_size, object_count, timestamp)
-        print(
-            f"{bucket_name}: size={total_size} bytes, "
-            f"objects={object_count}, ts={timestamp}"
-        )
-        recorded.append(
-            {
-                "bucket": bucket_name,
-                "size": total_size,
-                "count": object_count,
-                "timestamp": timestamp,
-            }
-        )
-    return {"recorded": recorded}
+    # Per-message loop (not per-batch dedupe) so we can report exactly which
+    # SQS messages failed. Lambda will retry only those; the rest are deleted
+    # from the queue as usual, and repeated failures land in the DLQ.
+    batch_item_failures = []
+    processed_this_batch = set()
+
+    for sqs_record in event.get("Records", []):
+        try:
+            for bucket_name in buckets_from_sqs_record(sqs_record):
+                # A burst of PUTs can produce many messages for the same bucket
+                # in one batch -- recompute once per bucket per invocation.
+                if bucket_name in processed_this_batch:
+                    continue
+                processed_this_batch.add(bucket_name)
+
+                total_size, object_count = compute_bucket_size(bucket_name)
+                # Epoch milliseconds: numeric, so the Part 3 "last 10 seconds"
+                # BETWEEN query compares correctly, and fine-grained enough that
+                # two events rarely collide on the (BucketName, Timestamp) key.
+                timestamp = int(time.time() * 1000)
+                record_size(bucket_name, total_size, object_count, timestamp)
+                print(
+                    f"{bucket_name}: size={total_size} bytes, "
+                    f"objects={object_count}, ts={timestamp}"
+                )
+        except Exception as exc:
+            # Don't fail the whole batch on one bad message; let SQS retry just
+            # this one and eventually route it to the DLQ.
+            print(f"failed message {sqs_record.get('messageId')}: {exc}")
+            batch_item_failures.append({"itemIdentifier": sqs_record["messageId"]})
+
+    return {"batchItemFailures": batch_item_failures}

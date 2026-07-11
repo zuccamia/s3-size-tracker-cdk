@@ -43,7 +43,7 @@ Lambdas as environment variables. IAM access is granted least-privilege in code.
 
 ```bash
 # Node + CDK CLI
-npm install                       # installs aws-cdk locally
+rm -rf node_modules && npm install         # fresh installs aws-cdk locally
 npx cdk --version
 
 # If node still defaults to the homebrew-installed 26.0.0 version
