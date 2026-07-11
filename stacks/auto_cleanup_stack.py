@@ -46,9 +46,11 @@ class AutoCleanupStack(Stack):
     METRIC_NAMESPACE = "Assignment4App"
     METRIC_NAME = "TotalObjectSize"
     ALARM_ID = "CleanerAlarm"
-    # Threshold value the assignment fixes: SUM of size_delta above 20 bytes
-    # fires the alarm. The metric is already in bytes (size_delta comes from
-    # the S3 event as bytes), so no unit conversion is needed.
+    # Threshold the assignment fixes: SUM of size_delta at or above 20 bytes
+    # fires the alarm. Comparison is >= (not >) so a bucket that lands exactly
+    # at 20 still triggers cleanup -- the intent is "keep size strictly below
+    # 20 bytes", not "at most 20". The metric is already in bytes (size_delta
+    # comes from the S3 event as bytes), so no unit conversion is needed.
     ALARM_THRESHOLD_BYTES = 20
 
     def __init__(
@@ -205,7 +207,7 @@ class AutoCleanupStack(Stack):
             threshold=self.ALARM_THRESHOLD_BYTES,
             evaluation_periods=1,
             datapoints_to_alarm=1,
-            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
             treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
         )
         # Alarm action fires ONCE on OK -> ALARM transition (not on every

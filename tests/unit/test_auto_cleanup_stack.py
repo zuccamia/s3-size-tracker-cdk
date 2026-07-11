@@ -128,7 +128,7 @@ def test_auto_cleanup_metric_filter_alarm_and_cleaner(stacks):
         Match.object_like(
             {
                 "Threshold": 20,
-                "ComparisonOperator": "GreaterThanThreshold",
+                "ComparisonOperator": "GreaterThanOrEqualToThreshold",
                 "EvaluationPeriods": 1,
                 "TreatMissingData": "notBreaching",
                 "Namespace": "Assignment4App",
