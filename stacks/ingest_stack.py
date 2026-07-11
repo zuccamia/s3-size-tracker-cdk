@@ -1,26 +1,24 @@
 """
-Create S3 bucket + SNS topic + per-consumer SQS queues (with DLQs) + consumer
-lambdas (size tracker + logger).
+Event source for the app: S3 bucket + SNS fanout topic + size-tracking consumer.
 
-Fanout wiring:
+Wiring:
 
-    S3 -> SNS topic -+-> SQS SizeTrackerQueue -> SizeTrackingFn
-                     |         (DLQ after 5 receives)
-                     |
-                     +-> SQS LoggingQueue     -> LoggingFn
-                               (DLQ after 5 receives)
+    S3 bucket -> SNS S3EventsTopic -> SQS SizeTrackerQueue -> SizeTrackingFn
+                                          (DLQ after 5 receives)
 
-Both consumers share a small "s3_events" Lambda layer that peels the
-SQS -> SNS -> S3 envelope; a third consumer would just be a new queue +
-subscription + function.
+Additional consumers (the logger + alarm + cleaner control loop) live in
+AutoCleanupStack, subscribed to the same topic. Anything else that needs S3
+events -- future tail-logger, replicator, whatever -- would similarly attach
+to `self.topic` from a separate stack.
 
-An S3 event notification needs the topic/lambda ARN, and the function needs the
-bucket name -- splitting them across stacks creates a circular dependency
-("deadly embrace"). Keeping them together side-steps that entirely.
+An S3 event notification needs the topic/lambda ARN, and the function needs
+the bucket name -- splitting these across stacks creates a circular dependency
+("deadly embrace"). Keeping the S3->SNS wiring in the same stack as the bucket
+side-steps that. Downstream consumers only reference the topic (unidirectional
+dep), which is safe.
 """
 
 import aws_cdk.aws_dynamodb as dynamodb
-import aws_cdk.aws_iam as iam
 import aws_cdk.aws_lambda as lambda_
 import aws_cdk.aws_lambda_event_sources as lambda_events
 import aws_cdk.aws_logs as logs
@@ -36,14 +34,10 @@ from constructs import Construct
 class IngestStack(Stack):
     SIZE_TRACKING_FN_ID = "SizeTrackingFn"
     SIZE_TRACKING_CODE_DIR = "lambdas/size_tracker"
-    LOGGING_FN_ID = "LoggingFn"
-    LOGGING_CODE_DIR = "lambdas/logging"
     BUCKET_CONSTRUCT_ID = "TestBucket"
     TOPIC_ID = "S3EventsTopic"
     QUEUE_ID = "SizeTrackerQueue"
     DLQ_ID = "SizeTrackerDLQ"
-    LOGGING_QUEUE_ID = "LoggingQueue"
-    LOGGING_DLQ_ID = "LoggingDLQ"
     S3_EVENTS_LAYER_ID = "S3EventsLayer"
     S3_EVENTS_LAYER_DIR = "layers/s3_events"
 
@@ -70,9 +64,10 @@ class IngestStack(Stack):
         # Fanout hub: S3 publishes here, any number of subscribers can consume.
         self.topic = sns.Topic(self, self.TOPIC_ID)
 
-        # Shared envelope-parsing helper (s3_events.py) attached to every
-        # SQS-triggered consumer so we don't duplicate the two-JSON-loads peel.
-        s3_events_layer = lambda_.LayerVersion(
+        # Shared envelope-parsing helper (s3_events.py). Exposed on self so
+        # downstream stacks (AutoCleanupStack) can attach it to their own
+        # SQS-triggered consumers without duplicating the two-JSON-loads peel.
+        self.s3_events_layer = lambda_.LayerVersion(
             self,
             self.S3_EVENTS_LAYER_ID,
             code=lambda_.Code.from_asset(self.S3_EVENTS_LAYER_DIR),
@@ -115,7 +110,7 @@ class IngestStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda_function.lambda_handler",
             code=lambda_.Code.from_asset(self.SIZE_TRACKING_CODE_DIR),
-            layers=[s3_events_layer],
+            layers=[self.s3_events_layer],
             timeout=Duration.seconds(30),
             # CloudFormation-owned log group so `cdk destroy` removes it too;
             # without this, Lambda creates an orphan /aws/lambda/... group.
@@ -146,71 +141,7 @@ class IngestStack(Stack):
             )
         )
 
-        # Second consumer on the same topic: a logger that writes one JSON
-        # line per S3 event. Independent queue + DLQ so a stall here doesn't
-        # back up the size tracker (and vice versa) -- that's the whole point
-        # of the fanout pattern.
-        self.logging_dlq = sqs.Queue(
-            self,
-            self.LOGGING_DLQ_ID,
-            retention_period=Duration.days(14),
-        )
-        self.logging_queue = sqs.Queue(
-            self,
-            self.LOGGING_QUEUE_ID,
-            # Logger sleeps ~2s per delete before its FilterLogEvents call
-            # (see LOOKUP_DELAY_SECONDS in the handler), so keep the visibility
-            # timeout comfortably above fn timeout for the same reason as above.
-            visibility_timeout=Duration.seconds(60),
-            dead_letter_queue=sqs.DeadLetterQueue(
-                queue=self.logging_dlq,
-                max_receive_count=5,
-            ),
-        )
-        self.topic.add_subscription(sns_subs.SqsSubscription(self.logging_queue))
-
-        # Create the log group up-front so we can (a) pass its NAME to the fn
-        # via env var (the handler needs it for filter_log_events) and (b)
-        # scope the FilterLogEvents grant to the exact log group ARN.
-        logging_log_group = logs.LogGroup(
-            self,
-            f"{self.LOGGING_FN_ID}Logs",
-            retention=logs.RetentionDays.ONE_WEEK,
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-        logging_fn = lambda_.Function(
-            self,
-            self.LOGGING_FN_ID,
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="lambda_function.lambda_handler",
-            code=lambda_.Code.from_asset(self.LOGGING_CODE_DIR),
-            layers=[s3_events_layer],
-            timeout=Duration.seconds(30),
-            log_group=logging_log_group,
-            environment={
-                "LOG_GROUP_NAME": logging_log_group.log_group_name,
-            },
-        )
-        # Delete-size lookup reads the fn's own log group via filter_log_events;
-        # least-privilege grant scoped to just that group's ARN.
-        logging_fn.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=["logs:FilterLogEvents"],
-                resources=[logging_log_group.log_group_arn],
-            )
-        )
-        logging_fn.add_event_source(
-            lambda_events.SqsEventSource(
-                self.logging_queue,
-                batch_size=10,
-                report_batch_item_failures=True,
-            )
-        )
-
         CfnOutput(self, "BucketName", value=self.bucket.bucket_name)
         CfnOutput(self, "TopicArn", value=self.topic.topic_arn)
-        CfnOutput(self, "QueueUrl", value=self.queue.queue_url)
-        CfnOutput(self, "DLQUrl", value=self.dlq.queue_url)
-        CfnOutput(self, "LoggingQueueUrl", value=self.logging_queue.queue_url)
-        CfnOutput(self, "LoggingDLQUrl", value=self.logging_dlq.queue_url)
-        CfnOutput(self, "LoggingLogGroupName", value=logging_log_group.log_group_name)
+        CfnOutput(self, "SizeTrackerQueueUrl", value=self.queue.queue_url)
+        CfnOutput(self, "SizeTrackerDLQUrl", value=self.dlq.queue_url)

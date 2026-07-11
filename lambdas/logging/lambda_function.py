@@ -43,14 +43,20 @@ def _emit(payload):
     print(json.dumps(payload))
 
 
-def _lookup_create_size(object_name):
-    # Most recent creation for this key. filter_log_events returns oldest
-    # first, so `events[-1]` is the latest match within the window.
+def _lookup_create_size(bucket_name, object_name):
+    # Most recent creation for this (bucket, key). Scoped by bucket_name so a
+    # same-named object living in another bucket can't leak its size into this
+    # bucket's delete. filter_log_events returns oldest first, so `events[-1]`
+    # is the latest match within the window.
     start_time = int(time.time() * 1000) - LOOKUP_WINDOW_MS
     resp = LOGS.filter_log_events(
         logGroupName=LOG_GROUP_NAME,
         startTime=start_time,
-        filterPattern=f'{{ $.object_name = "{object_name}" && $.size_delta > 0 }}',
+        filterPattern=(
+            f'{{ $.object_name = "{object_name}" '
+            f'&& $.bucket_name = "{bucket_name}" '
+            f'&& $.size_delta > 0 }}'
+        ),
     )
     events = resp.get("events", [])
     if not events:
@@ -63,26 +69,40 @@ def _lookup_create_size(object_name):
 
 def _handle_s3_record(record):
     event_name = record.get("eventName", "")
+    bucket_name = record["s3"]["bucket"]["name"]
     object_name = record["s3"]["object"]["key"]
 
     if event_name.startswith("ObjectCreated:"):
         size = record["s3"]["object"]["size"]
-        _emit({"object_name": object_name, "size_delta": size})
+        _emit(
+            {
+                "bucket_name": bucket_name,
+                "object_name": object_name,
+                "size_delta": size,
+            }
+        )
         return
 
     if event_name.startswith("ObjectRemoved:"):
         time.sleep(LOOKUP_DELAY_SECONDS)
-        prior_size = _lookup_create_size(object_name)
+        prior_size = _lookup_create_size(bucket_name, object_name)
         if prior_size is None:
             _emit(
                 {
+                    "bucket_name": bucket_name,
                     "object_name": object_name,
                     "size_delta": None,
                     "warning": "no prior create log found within lookup window",
                 }
             )
         else:
-            _emit({"object_name": object_name, "size_delta": -prior_size})
+            _emit(
+                {
+                    "bucket_name": bucket_name,
+                    "object_name": object_name,
+                    "size_delta": -prior_size,
+                }
+            )
         return
 
     # Unknown event class -- record it but don't fail the batch.

@@ -6,6 +6,7 @@ matplotlib layer doesn't spin up a container during tests.
 import pytest
 from aws_cdk import App
 
+from stacks.auto_cleanup_stack import AutoCleanupStack
 from stacks.data_stack import DataStack
 from stacks.ingest_stack import IngestStack
 from stacks.plot_api_stack import PlotApiStack
@@ -21,6 +22,13 @@ def stacks():
         "IngestStack",
         table=data.table,
         gsi_partition_value=DataStack.GSI_PARTITION_VALUE,
+    )
+    auto_cleanup = AutoCleanupStack(
+        app,
+        "AutoCleanupStack",
+        bucket=ingest.bucket,
+        topic=ingest.topic,
+        s3_events_layer=ingest.s3_events_layer,
     )
     plot_api = PlotApiStack(
         app,
@@ -39,6 +47,7 @@ def stacks():
     return {
         "DataStack": data,
         "IngestStack": ingest,
+        "AutoCleanupStack": auto_cleanup,
         "PlotApiStack": plot_api,
         "DriverStack": driver,
     }
