@@ -16,7 +16,10 @@ GSI_NAME = os.environ["GSI_NAME"]
 GSI_PARTITION_VALUE = os.environ.get("GSI_PARTITION_VALUE", "ALL_BUCKETS")
 
 PLOT_OBJECT_KEY = os.environ.get("PLOT_KEY", "plot")
-WINDOW_MS = 10_000  # last 10 seconds
+# Driver runs ~4.5 min (3 x 90s sleeps between PUTs, plus alarm/Cleaner cycle
+# time), so anything shorter would miss most of the sequence. 10 minutes gives
+# comfortable headroom for reruns and clock skew.
+WINDOW_MS = 10 * 60 * 1000
 
 
 def query_recent_sizes(bucket_name, now_ms):
@@ -70,7 +73,7 @@ def build_plot(items, bucket_name, max_size):
     ax.axhline(y=max_size, color="r", linestyle="--", label="All-time max")
     ax.set_xlabel("Seconds ago")
     ax.set_ylabel("Bucket size (bytes)")
-    ax.set_title(f"{bucket_name} — last {WINDOW_MS // 1000}s")
+    ax.set_title(f"{bucket_name} — last {WINDOW_MS // 60_000} minutes")
     ax.legend()
     fig.tight_layout()
 
