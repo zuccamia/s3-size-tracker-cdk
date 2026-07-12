@@ -16,10 +16,10 @@ GSI_NAME = os.environ["GSI_NAME"]
 GSI_PARTITION_VALUE = os.environ.get("GSI_PARTITION_VALUE", "ALL_BUCKETS")
 
 PLOT_OBJECT_KEY = os.environ.get("PLOT_KEY", "plot")
-# Driver runs ~4.5 min (3 x 90s sleeps between PUTs, plus alarm/Cleaner cycle
-# time), so anything shorter would miss most of the sequence. 10 minutes gives
-# comfortable headroom for reruns and clock skew.
-WINDOW_MS = 10 * 60 * 1000
+# Driver runs ~4 min (3 x 75s sleeps between PUTs, plus alarm/Cleaner cycle
+# time). 6 minutes gives ~2 min of headroom so calling /plot a bit late (or
+# through a cold start) still catches the earliest datapoint.
+WINDOW_MS = 6 * 60 * 1000
 
 
 def query_recent_sizes(bucket_name, now_ms):
@@ -61,17 +61,19 @@ def build_plot(items, bucket_name, max_size):
     timestamps = [int(i["Timestamp"]["N"]) for i in items]
     sizes = [int(i["BucketSize"]["N"]) for i in items]
 
-    # Convert epoch-ms to seconds-ago for a readable X axis.
+    # Convert epoch-ms to minutes-ago for a readable X axis (window is 6 min
+    # to match the driver's ~4-min runtime; showing seconds would give a
+    # cramped -240 to 0 range).
     if timestamps:
         latest = timestamps[-1]
-        x_vals = [(t - latest) / 1000 for t in timestamps]  # negative offsets
+        x_vals = [(t - latest) / 60_000 for t in timestamps]  # negative offsets
     else:
         x_vals = []
 
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.plot(x_vals, sizes, marker="o", label=f"{bucket_name} size")
     ax.axhline(y=max_size, color="r", linestyle="--", label="All-time max")
-    ax.set_xlabel("Seconds ago")
+    ax.set_xlabel("Minutes ago")
     ax.set_ylabel("Bucket size (bytes)")
     ax.set_title(f"{bucket_name} — last {WINDOW_MS // 60_000} minutes")
     ax.legend()

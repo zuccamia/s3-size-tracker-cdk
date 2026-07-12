@@ -25,8 +25,12 @@ PLOT_API_URL = os.environ["PLOT_API_URL"]
 
 http = urllib3.PoolManager()
 
-# Slightly longer than one alarm period (60s) so each PUT falls in a distinct
-# evaluation window, giving the alarm a chance to fire cleanly between steps.
+# 30s past one alarm period (60s). Long enough that the alarm has time to
+# evaluate + fire + Cleaner to run + the delete-delta to propagate through
+# the metric filter before the next PUT, with headroom against timing
+# jitter. Also spaces the driver's PUTs far enough apart that the plot's
+# datapoints don't visually pile up. Going lower (e.g. 65s) races the
+# Cleaner and drifts datapoints across wall-clock period boundaries.
 STEP_DELAY_SECONDS = 90
 
 

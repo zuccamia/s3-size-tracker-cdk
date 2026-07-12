@@ -86,3 +86,42 @@ Removes all four stacks and their resources — Lambdas, REST API, IAM roles,
 DynamoDB table/GSI, and the S3 bucket (emptied automatically) and CloudWatch log
 groups. The CDK bootstrap stack is separate and is left in place, so re-deploying
 later does **not** require bootstrapping again.
+
+## Limitations
+
+Two constraints shape the auto-cleanup loop's behavior. Both come from the
+assignment spec, not the implementation.
+
+### Delta-SUM alarm can't track bucket state
+
+The alarm sums `size_delta` values within each 1-min window. It never sees
+the bucket's current total. Events on either side of a minute boundary land
+in different windows and don't add up.
+
+In the driver scenario (a1=18 B, a2=28 B, a3=2 B), step 2's +28 clears the
+threshold and Cleaner deletes a2. Step 3's +2 delta cannot reach 20 in any
+window, alone or combined with the −28 delete-delta. So **a1 is never
+cleaned**, even though the bucket total after step 3 is 20 B.
+
+Fixing it means switching to an absolute-size metric, or letting Cleaner
+delete more than one object per fire. Both violate the spec.
+
+### Lambda 15-min timeout caps the SUM window
+
+We only produce 3 events across the whole run. That's not enough for a SUM
+window to accumulate on its own, so the driver has to sleep between each
+PUT to give the alarm time to evaluate the completed window and fire the
+Cleaner. With a busier workload the sleeps wouldn't be needed — events
+would arrive fast enough that any window's SUM would naturally cross the
+threshold.
+
+A wider period reduces boundary-straddling. But because we need the sleep,
+three steps × (period + buffer) must fit under Lambda's 15-min hard cap.
+That leaves ~4-5 min as the widest practical period. A 5-min period already
+needs ~15 min 45 s of sleep in total, which exceeds the cap. To go wider,
+orchestration would have to move out of a single Lambda (e.g. Step
+Functions).
+
+We stay at 1 min for demo purposes. A wider window (3 or 4 min) would still
+miss cleaning up a1 — both are equally spurious against this scenario — so
+we pick the shorter window that gives a faster demo cycle.
